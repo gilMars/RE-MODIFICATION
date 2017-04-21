@@ -44,7 +44,7 @@ Index: src/map/guild.c
  }
  
  /*=============================================
-+ * @author Gilmar B. Freitas(@Kyomai)
++ * Desenvolvedor: Gilmar B. Freitas(@Kyomai)
 + * Conta a quantidade de jogadores de uma determinada classe
 + *--------------------------------------------*/
 +int guild_class_count( int guild_id, int16 class ) {
