@@ -1,0 +1,397 @@
+Index: conf/battle/guild.conf
+===================================================================
+--- conf/battle/guild.conf	(revision 441)
++++ conf/battle/guild.conf	(working copy)
+@@ -61,3 +61,8 @@
+ // padrão: no
+ guild_castle_invite: no
+ guild_castle_expulsion: no
++
++
++// Limite de classes repetidas no clã
++// guild_job_limiter = 0 para desativar, quantidade máxima é 999
++guild_job_limiter: 1
+\ No newline at end of file
+Index: src/map/battle.c
+===================================================================
+--- src/map/battle.c	(revision 441)
++++ src/map/battle.c	(working copy)
+@@ -7433,6 +7433,7 @@
+ 	{ "max_joblv_taekwon_master",			&battle_config.max_joblv_taekwon_master,		 50,	0,		255,			},
+ 	{ "max_joblv_soullinker",				&battle_config.max_joblv_soullinker,		 	 50,	0,		255,			},
+ 	{ "max_joblv_sn_snb",					&battle_config.max_joblv_sn_snb,		 	 	 99,	0,		255,			},
++	{ "guild_job_limiter",					&battle_config.guild_job_limiter,		 	 	    0,	    0,		999,		},
+ };
+ #ifndef STATS_OPT_OUT
+ /**
+Index: src/map/battle.h
+===================================================================
+--- src/map/battle.h	(revision 441)
++++ src/map/battle.h	(working copy)
+@@ -579,6 +579,8 @@
+ 	int max_joblv_taekwon_master;
+ 	int max_joblv_soullinker;
+ 	int max_joblv_sn_snb;
++	int guild_job_limiter;
++	
+ };
+ 
+ /* criteria for battle_config.idletime_critera */
+Index: src/map/guild.c
+===================================================================
+--- src/map/guild.c	(revision 441)
++++ src/map/guild.c	(working copy)
+@@ -8,14 +8,14 @@
+ *                            www.brathena.org                                *
+ ******************************************************************************
+ * src/map/guild.c                                                            *
+-* Funï¿½ï¿½es referentes ï¿½s guildas e castelos                                   *
++* Fun??es referentes ?s guildas e castelos                                   *
+ ******************************************************************************
+ * Copyright (c) brAthena Dev Team                                            *
+ * Copyright (c) Hercules Dev Team                                            *
+ * Copyright (c) Athena Dev Teams                                             *
+ *                                                                            *
+-* Licenciado sob a licenï¿½a GNU GPL                                           *
+-* Para mais informaï¿½ï¿½es leia o arquivo LICENSE na raï¿½z do emulador           *
++* Licenciado sob a licen?a GNU GPL                                           *
++* Para mais informa??es leia o arquivo LICENSE na ra?z do emulador           *
+ *****************************************************************************/
+ 
+ #define BRATHENA_CORE
+@@ -624,6 +624,27 @@
+ }
+ 
+ /*=============================================
++ * Desenvolvedor: Gilmar B. Freitas(@Kyomai)
++ * Conta a quantidade de jogadores de uma determinada classe
++ *--------------------------------------------*/
++int guild_job_count( struct guild* g, short class ) {
++
++	int i, quantidade = 0;
++	
++	for (i = 0; i < g->max_member; ++i) {
++		
++		// Caso o jogador esteja online verifica a classe do personagem diretamente.
++		if (g->member[i].online) {
++			if (g->member[i].sd->status.class_ == class)++quantidade;
++		} else {
++			if (g->member[i].class_ == class)++quantidade;
++		}
++		
++	}
++	return quantidade;
++}
++
++/*=============================================
+  * Player sd send a guild invatation to player tsd to join his guild
+  *--------------------------------------------*/
+ int guild_invite(struct map_session_data *sd, struct map_session_data *tsd) {
+@@ -725,7 +746,26 @@
+ 			if( tsd ) clif->guild_inviteack(tsd,3);
+ 			return 0;
+ 		}
++		
++				
++		// Verifica se está habilitado o recurso de limitação de classes repetidas
++		if ( battle_config.guild_job_limiter > 0 ) {
+ 
++			int quantidade = guild_job_count(g,sd->status.class_);
++
++			// Se a quantidade de membros da mesma classe for igual ou maior que a quantidade limite definida no arquivo guild.conf o jogador convidadonão será convidado
++			if ( quantidade >= battle_config.guild_job_limiter ) {
++				char mensagem[128];
++				sprintf( mensagem, "Você não pode se tornar membro do clã, porque o clã já possui %d %s.", quantidade, pc->job_name(sd->status.class_) );
++				clif->messagecolor_self(sd->fd, COLOR_RED, mensagem);
++				sd->guild_invite = 0; // Apaga o convite ser membro do clã.
++				sd->guild_invite_account = 0;
++				return 0;
++			}
++		}
++		// Fim da verificação
++
++
+ 		guild->makemember(&m,sd);
+ 		intif->guild_addmember(guild_id, &m);
+ 		//TODO: send a minimap update to this player
+@@ -2348,6 +2388,7 @@
+ 	guild->recv_noinfo = guild_recv_noinfo;
+ 	guild->recv_info = guild_recv_info;
+ 	guild->npc_request_info = guild_npc_request_info;
++	guild->job_count = guild_job_count;
+ 	guild->invite = guild_invite;
+ 	guild->reply_invite = guild_reply_invite;
+ 	guild->member_joined = guild_member_joined;
+Index: src/map/guild.h
+===================================================================
+--- src/map/guild.h	(revision 441)
++++ src/map/guild.h	(working copy)
+@@ -108,6 +108,7 @@
+ 	int (*recv_noinfo) (int guild_id);
+ 	int (*recv_info) (struct guild *sg);
+ 	int (*npc_request_info) (int guild_id,const char *ev);
++	int (*job_count) (struct guild *g, short class);
+ 	int (*invite) (struct map_session_data *sd,struct map_session_data *tsd);
+ 	int (*reply_invite) (struct map_session_data *sd,int guild_id,int flag);
+ 	void (*member_joined) (struct map_session_data *sd);
+Index: src/map/pc.c
+===================================================================
+--- src/map/pc.c	(revision 441)
++++ src/map/pc.c	(working copy)
+@@ -8,14 +8,14 @@
+ *                            www.brathena.org                                *
+ ******************************************************************************
+ * src/map/pc.c                                                               *
+-* FunÃ§Ãµes referentes aos parÃ¢metros do personagem e verificaÃ§Ãµes             *
++* Funções referentes aos parâmetros do personagem e verificações             *
+ ******************************************************************************
+ * Copyright (c) brAthena Dev Team                                            *
+ * Copyright (c) Hercules Dev Team                                            *
+ * Copyright (c) Athena Dev Teams                                             *
+ *                                                                            *
+-* Licenciado sob a licenï¿½a GNU GPL                                           *
+-* Para mais informaÃ§Ãµes leia o arquivo LICENSE na raÃ­z do emulador           *
++* Licenciado sob a licen?a GNU GPL                                           *
++* Para mais informações leia o arquivo LICENSE na raíz do emulador           *
+ *****************************************************************************/
+ 
+ #define BRATHENA_CORE
+@@ -81,7 +81,7 @@
+ #ifdef RENEWAL
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,  70, 100	},		// Neutro LV.1
+-		{	100,  25, 100, 150,  90, 100,  75, 100, 100, 100	},		// Ãgua LV.1
++		{	100,  25, 100, 150,  90, 100,  75, 100, 100, 100	},		// Água LV.1
+ 		{	100, 100,  25,  90, 150, 100,  75, 100, 100, 100	},		// Terra LV.1
+ 		{	100,  90, 150,  25, 100, 100,  75, 100, 100, 125	},		// Fogo LV.1
+ 		{	100, 175,  90, 100,  25, 100,  75, 100, 100, 100	},		// Vento LV.1
+@@ -93,7 +93,7 @@
+ 	},
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,  50, 100	},		// Neutro LV.2
+-		{	100,   0, 100, 175,  80, 100,  50,  75, 100, 100	},		// Ãgua LV.2
++		{	100,   0, 100, 175,  80, 100,  50,  75, 100, 100	},		// Água LV.2
+ 		{	100, 100,   0,  80, 175, 100,  50,  75, 100, 100	},		// Terra LV.2
+ 		{	100,  80, 175,   0, 100, 100,  50,  75, 100, 150	},		// Fogo LV.2
+ 		{	100, 175,  80, 100,   0, 100,  50,  75, 100, 100	},		// Vento LV.2
+@@ -105,7 +105,7 @@
+ 	},
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,   0, 100	},		// Neutro LV.3
+-		{	100, -25, 100, 200,  70, 100,  25,  50, 100, 125	},		// Ãgua LV.3
++		{	100, -25, 100, 200,  70, 100,  25,  50, 100, 125	},		// Água LV.3
+ 		{	100, 100, -25,  70, 200, 100,  25,  50, 100, 100	},		// Terra LV.3
+ 		{	100,  70, 200, -25, 100, 100,  25,  50, 100, 175	},		// Fogo LV.3
+ 		{	100, 200,  70, 100, -25, 100,  25,  50, 100, 100	},		// Vento LV.3
+@@ -117,7 +117,7 @@
+ 	},
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,   0, 100	},		// Neutro LV.4
+-		{	100, -50, 100, 200,  60,  75,   0,  25, 100, 150	},		// Ãgua LV.4
++		{	100, -50, 100, 200,  60,  75,   0,  25, 100, 150	},		// Água LV.4
+ 		{	100, 100, -50,  60, 200,  75,   0,  25, 100,  50	},		// Terra LV.4
+ 		{	100,  60, 200, -50, 100,  75,   0,  25, 100, 200	},		// Fogo LV.4
+ 		{	100, 200,  60, 100, -50,  75,   0,  25, 100, 100	},		// Vento LV.4
+@@ -130,7 +130,7 @@
+ #else
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,  25, 100	},		// Neutro LV.1
+-		{	100,  25, 100, 150,  50, 100,  75, 100, 100, 100	},		// Ãgua LV.1
++		{	100,  25, 100, 150,  50, 100,  75, 100, 100, 100	},		// Água LV.1
+ 		{	100, 100, 100,  50, 150, 100,  75, 100, 100, 100	},		// Terra LV.1
+ 		{	100,  50, 150,  25, 100, 100,  75, 100, 100, 125	},		// Fogo LV.1
+ 		{	100, 175,  50, 100,  25, 100,  75, 100, 100, 100	},		// Vento LV.1
+@@ -142,7 +142,7 @@
+ 	},
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,  25, 100	},		// Neutro LV.2
+-		{	100,   0, 100, 175,  25, 100,  50,  75, 100, 100	},		// Ãgua LV.2
++		{	100,   0, 100, 175,  25, 100,  50,  75, 100, 100	},		// Água LV.2
+ 		{	100, 100,  50,  25, 175, 100,  50,  75, 100, 100	},		// Terra LV.2
+ 		{	100,  25, 175,   0, 100, 100,  50,  75, 100, 150	},		// Fogo LV.2
+ 		{	100, 175,  25, 100,   0, 100,  50,  75, 100, 100	},		// Vento LV.2
+@@ -154,7 +154,7 @@
+ 	},
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,   0, 100	},		// Neutro LV.3
+-		{	100, -25, 100, 200,   0, 100,  25,  50, 100, 125	},		// Ãgua LV.3
++		{	100, -25, 100, 200,   0, 100,  25,  50, 100, 125	},		// Água LV.3
+ 		{	100, 100,   0,   0, 200, 100,  25,  50, 100,  75	},		// Terra LV.3
+ 		{	100,   0, 200, -25, 100, 100,  25,  50, 100, 175	},		// Fogo LV.3
+ 		{	100, 200,   0, 100, -25, 100,  25,  50, 100, 100	},		// Vento LV.3
+@@ -166,7 +166,7 @@
+ 	},
+ 	{//		Neut Watr Erth Fire Wind Pois Holy Shdw Gho  Und
+ 		{	100, 100, 100, 100, 100, 100, 100, 100,   0, 100	},		// Neutro LV.4
+-		{	100, -50, 100, 200,   0,  75,   0,  25, 100, 150	},		// Ãgua LV.4
++		{	100, -50, 100, 200,   0,  75,   0,  25, 100, 150	},		// Água LV.4
+ 		{	100, 100, -25,   0, 200,  75,   0,  25, 100,  50	},		// Terra LV.4
+ 		{	100,   0, 200, -50, 100,  75,   0,  25, 100, 200	},		// Fogo LV.4
+ 		{	100, 200,   0, 100, -50,  75,   0,  25, 100, 100	},		// Vento LV.4
+@@ -1372,7 +1372,7 @@
+ 	sd->sc_display = NULL;
+ 	sd->sc_display_count = 0;
+ 
+-	// [CarlosHenrq] SeguranÃ§a para NPCs do tipo trader#NTS_CUSTOM
++	// [CarlosHenrq] Segurança para NPCs do tipo trader#NTS_CUSTOM
+ 	sd->trader.ok = false;
+ 	sd->trader.price = sd->trader.points = 0;
+ 
+@@ -1537,12 +1537,12 @@
+ 	if( pc_readaccountreg(sd,script->add_str("#BLOCKPASS")) > 0 )
+ 		sd->state.protection_acc = 1;
+ 
+-	// Carrega o "last_ip" para o jogador com as informaÃ§Ãµes para geraÃ§Ã£o de log, visto que
+-	// O Jogador pode ter colocado eu autotrade e isso vai dificultar se lÃ¡ pegar pelo ip da sessÃ£o. [CarlosHenrq, 2016-10-27]
++	// Carrega o "last_ip" para o jogador com as informações para geração de log, visto que
++	// O Jogador pode ter colocado eu autotrade e isso vai dificultar se lá pegar pelo ip da sessão. [CarlosHenrq, 2016-10-27]
+ 	if(sd->fd && sockt->session[sd->fd])
+ 	{
+ 		last_ip = sockt->ip2str(sockt->session[sd->fd]->client_addr, NULL);
+-		safestrncpy(sd->status.last_ip, last_ip, 16); // O Tamanho disso estÃ¡ em: mmo.h [CarlosHenrq, 2016-10-27]
++		safestrncpy(sd->status.last_ip, last_ip, 16); // O Tamanho disso está em: mmo.h [CarlosHenrq, 2016-10-27]
+ 	}
+ 	
+ 		
+@@ -6874,7 +6874,7 @@
+ 	if(sd->state.showexp) {
+ 		char output[256];
+ 		sprintf(output,
+-			"Experiï¿½ncia Base:%u (%.2f%%) Classe:%u (%.2f%%)",base_exp,nextbp*(float)100,job_exp,nextjp*(float)100);
++			"Experi?ncia Base:%u (%.2f%%) Classe:%u (%.2f%%)",base_exp,nextbp*(float)100,job_exp,nextjp*(float)100);
+ 		clif_disp_onlyself(sd,output,strlen(output));
+ 	}
+ 
+@@ -7194,7 +7194,7 @@
+ 		else if (sd->sktree.third)
+ 			clif->msgtable_num(sd, MSG_SKILL_POINTS_LEFT_JOB2, sd->sktree.third);
+ 		else if (pc->calc_skillpoint(sd) < 9) /* TODO: official response? */
+-			clif->messagecolor_self(sd->fd, COLOR_RED, "Vocï¿½ precisa das habilidades bï¿½sicas.");
++			clif->messagecolor_self(sd->fd, COLOR_RED, "Voc? precisa das habilidades b?sicas.");
+ 	}
+ 	return 0;
+ }
+@@ -8707,6 +8707,46 @@
+ 			break;
+ 		}
+ 	}
++	
++	// Verificação, caso o sistema de limitação de classe esteja ativo.
++	if ( battle_config.guild_job_limiter > 0 ) {
++		
++		struct guild *g = sd->guild;
++		// Verifica a exitência do clã para determinado jogador.
++		if (g) {
++			
++			// Verifica a quantidade de jogadores da mesma classe que estão na guild incluindo o próprio jogador.
++			int quantidade = guild->job_count(g, sd->status.class_);
++			
++			// Caso contando com ele seja maior do que o limite, ele será expulso.
++			if (quantidade > battle_config.guild_job_limiter) {
++				
++				/*
++				 * Verifica se o jogador é o líder do clã, caso positivo ele terá de escolher outro membro da
++				 * mesma classe para ser removido.
++				*/
++				if (sd->state.gmaster_flag) {
++					
++					// Percorre os membros do clã.
++					int indice;
++					for (indice = 0; indice < g->max_member; ++indice) {
++						
++						// Porcura um membro da mesma classe para ser removido.
++						if ((g->member[indice].class_ == sd->status.class_) && (g->member[indice].char_id != sd->status.char_id)) {
++							// Remove membro do clã
++							intif->guild_leave(g->guild_id,g->member[indice].account_id,g->member[indice].char_id,1,"Excesso de contigente");
++							// Finaliza o laço de repetição.
++							indice = g->max_member;					
++						}
++					}				
++				} else {
++					// Remove o membro do clã.
++					intif->guild_leave(g->guild_id,sd->status.account_id,sd->status.char_id,1,"Excesso de contigente");
++				}					
++			}			
++		}
++	}
++	// Fim da verificação.
+ 
+ 	return 0;
+ }
+@@ -11068,24 +11108,24 @@
+ // Retorna o level correspondente ao identificador.
+ // enum _max_level_ (mmo.h)
+ /**
+- * FunÃ§Ã£o para retornar o nÃ­vel mÃ¡ximo de acordo com a classe do personagem.
++ * Função para retornar o nível máximo de acordo com a classe do personagem.
+  *
+  * @param job Classe do personagem.
+- * @param type Tipo de solicitaÃ§Ã£o. (0: NÃ­vel base, 1: NÃ­vel classe)
++ * @param type Tipo de solicitação. (0: Nível base, 1: Nível classe)
+  *
+- * @return O NÃ­vel mÃ¡ximo para a classe solicitada.
++ * @return O Nível máximo para a classe solicitada.
+  *
+- * -> Primeira versÃ£o estava sem as constantes de classe, nÃ£o se sabia quais deviam ser testadas.
++ * -> Primeira versão estava sem as constantes de classe, não se sabia quais deviam ser testadas.
+  * -> Alterado o nome de 'GetLevel' para -> 'pc_get_maxlevel'
+  * -> Adicionado todas as constantes das classes para trabalhar em cima.
+  *
+  * ---- Feita inicialmente pelo Shiraz
+  * ---- Refatorado por CarlosHenrq em 2016-10-27
+- *      ---> Ainda nÃ£o estÃ¡ bom, pois o lv mÃ¡ximo depende de src e nÃ£o de arquivos de configuraÃ§Ã£o do emulador e sim da src.
++ *      ---> Ainda não está bom, pois o lv máximo depende de src e não de arquivos de configuração do emulador e sim da src.
+  */
+ static int pc_get_maxlevel(int job, int type)
+ {
+-	// 0: NÃ­vel base
++	// 0: Nível base
+ 	if(type == 0)
+ 	{
+ 		if((job >= JOB_NOVICE && job <= JOB_NINJA) || (job >= JOB_BABY && job <= JOB_SUPER_BABY))
+@@ -11097,7 +11137,7 @@
+ 		else if((job >= JOB_SUPER_NOVICE_E && job <= JOB_SUPER_BABY_E) || (job == JOB_KAGEROU || job == JOB_REBELLION))
+ 			return battle_config.max_baselv_sne_ko;
+ 	}
+-	// 1: NÃ­vel classe
++	// 1: Nível classe
+ 	else if(type == 1)
+ 	{
+ 		if(job == JOB_NOVICE || job == JOB_BABY)
+@@ -11803,7 +11843,7 @@
+  */
+ int pc_vending_chat_count_near(struct map_session_data* sd)
+ {
+-	// Retorna o somatÃ³rio somente se a configuraÃ§Ã£o estiver ativa.
++	// Retorna o somatório somente se a configuração estiver ativa.
+ 	if(battle_config.vending_chat_block_range_check_cells > 0 && battle_config.vending_chat_block_range_count_players > 0)
+ 		return (vending->count_range(&sd->bl, battle_config.vending_chat_block_range_check_cells)
+ 						+ chat->count_range(&sd->bl, battle_config.vending_chat_block_range_check_cells));
+@@ -11812,15 +11852,15 @@
+ }
+ 
+ /**
+- * Testa se existem muitas vendas e lojas prÃ³ximas ao jogador.
++ * Testa se existem muitas vendas e lojas próximas ao jogador.
+  *
+  * @param struct map_session_data* sd
+  *
+- * @return Se houver muitos players com chat/loja entÃ£o retorna verdadeiro.
++ * @return Se houver muitos players com chat/loja então retorna verdadeiro.
+  */
+ bool pc_too_many_vending_chat_near(struct map_session_data* sd)
+ {
+-	// Se a configuraÃ§Ã£o tiver ativa, realiza os testes de contagem de venda.
++	// Se a configuração tiver ativa, realiza os testes de contagem de venda.
+ 	if(battle_config.vending_chat_block_range_check_cells > 0 && battle_config.vending_chat_block_range_count_players > 0)
+ 		return (pc->vending_chat_count_near(sd) >= battle_config.vending_chat_block_range_count_players);
+ 
+@@ -12198,7 +12238,7 @@
+ 	
+ 	pc->have_magnifier = pc_have_magnifier;
+ 
+-	// ConfiguraÃ§Ã£o para bloquear jogadores de abrir chat/loja prÃ³ximos uns aos outros. [CarlosHenrq]
++	// Configuração para bloquear jogadores de abrir chat/loja próximos uns aos outros. [CarlosHenrq]
+ 	pc->vending_chat_count_near = pc_vending_chat_count_near;
+ 	pc->too_many_vending_chat_near = pc_too_many_vending_chat_near;
+ }
